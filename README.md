@@ -12,8 +12,8 @@
 | 원칙 | 설명 |
 |------|------|
 | **제어권 확보** | EB 대신 수동 구성으로 인프라 전 계층에 대한 이해도 확보 |
-| **비용 효율성** | NAT Gateway 미사용, 보안그룹 강화로 비용 절감과 보안을 동시에 달성 |
-| **고가용성** | Multi-AZ(2a, 2c) 구성으로 단일 AZ 장애 시에도 서비스 지속 |
+| **비용 효율성** | 불필요한 NAT Gateway 식별 및 제거, Cost Explorer 기반 비용 모니터링 |
+| **고가용성** | Multi-AZ(2a, 2b) 구성으로 단일 AZ 장애 시에도 서비스 지속 |
 | **계층형 보안** | ALB → EC2 → RDS로 이어지는 연쇄 보안그룹(Security Group Chain) 설계 |
 
 ---
@@ -24,15 +24,19 @@
 
 | 구분 | 서브넷 이름 | CIDR | 가용 영역 | 용도 |
 |------|------------|------|-----------|------|
-| **Public** | Public-SN-A | 10.0.1.0/24 | ap-northeast-2a | ALB |
-| **Public** | Public-SN-C | 10.0.2.0/24 | ap-northeast-2c | ALB (이중화) |
-| **Public** | App-SN-A | 10.0.10.0/24 | ap-northeast-2a | EC2 (Spring Boot) |
-| **Public** | App-SN-C | 10.0.11.0/24 | ap-northeast-2c | EC2 확장 대비 |
-| **Private** | DB-SN-A | 10.0.20.0/24 | ap-northeast-2a | RDS (MySQL) |
-| **Private** | DB-SN-C | 10.0.21.0/24 | ap-northeast-2c | RDS (이중화) |
+| **Public** | ShowPing-subnet-public1-ap-northeast-2a | 10.0.0.0/20 | ap-northeast-2a | ALB, EC2 |
+| **Public** | ShowPing-subnet-public2-ap-northeast-2b | 10.0.16.0/20 | ap-northeast-2b | ALB (이중화) |
+| **Private** | ShowPing-subnet-private1-ap-northeast-2a | 10.0.128.0/20 | ap-northeast-2a | EC2 확장 대비 |
+| **Private** | ShowPing-subnet-private2-ap-northeast-2b | 10.0.144.0/20 | ap-northeast-2b | EC2 확장 대비 |
+| **Private** | ShowPing-subnet-private3-ap-northeast-2a | 10.0.160.0/20 | ap-northeast-2a | RDS (MySQL) |
+| **Private** | ShowPing-subnet-private4-ap-northeast-2b | 10.0.176.0/20 | ap-northeast-2b | RDS (이중화) |
 
 **왜 EC2를 퍼블릭 서브넷에 두었는가?**
-> NAT Gateway는 시간당 비용이 발생하여 월 4~5만원의 추가 비용이 발생합니다. 프로젝트 규모와 비용 효율성을 고려하여 NAT Gateway 대신 퍼블릭 서브넷에 EC2를 배치하되, 보안그룹을 촘촘하게 설정하여 ALB를 통해서만 트래픽을 수신하도록 제한했습니다.
+> NAT Gateway는 AZ당 월 약 4~5만원의 비용이 발생합니다. EC2를 퍼블릭 서브넷에 배치하되 보안그룹으로 ALB를 통해서만 트래픽을 수신하도록 제한하여, NAT Gateway 없이도 보안성을 확보했습니다. Private App 서브넷(private1, private2)은 향후 EC2 마이그레이션을 위해 예비로 확보해둔 상태입니다.
+
+**네트워크 연결:**
+- `ShowPing-igw`: 인터넷 게이트웨이 — VPC의 외부 통신 창구
+- `ShowPing-vpce-s3`: S3 VPC Endpoint — S3 통신을 VPC 내부에서 처리하여 NAT Gateway 우회
 
 ---
 
@@ -48,7 +52,7 @@
 **IAM 보안 정책:**
 - 정책명: `ShowPingSecretAccessPolicy`
 - IP 제한: 관리자 PC IP + EC2 탄력적 IP만 접근 허용
-- EC2에 IAM Role(인스턴스 프로필) 부여 → Access Key 파일 없이 Secrets Manager 접근
+- EC2에 IAM Role(`ShowPing-EC2-S3-Role`) 부여 → Access Key 파일 없이 Secrets Manager 및 S3 접근
 
 | 항목 | 기존 방식 (GitHub 중심) | 개선 방식 (AWS 중심) |
 |------|------------------------|---------------------|
@@ -61,7 +65,7 @@
 ### 🔹 3단계: 트래픽 분산 및 HTTPS (ALB & ACM & Route53)
 
 **ALB (Application Load Balancer):**
-- Internet-facing ALB를 Public Subnet에 배치
+- Internet-facing ALB를 Public Subnet(2a, 2b)에 배치
 - HTTPS(443) 리스너 + HTTP(80) → HTTPS 자동 리다이렉트 설정
 - Target Group: EC2 8080 포트, 헬스체크 프로토콜 HTTP
 
@@ -83,11 +87,11 @@
 |-----------|-------------|------|
 | **ShowPing-ALB-SG** | HTTP(80), HTTPS(443) ← `0.0.0.0/0` | 누구나 접속 가능한 정문 |
 | **ShowPing-EC2-SG** | 8080 ← `ShowPing-ALB-SG` | ALB를 통해서만 접근 가능 |
-| **ShowPing-RDS-SG** | 3306 ← `ShowPing-EC2-SG` | EC2 서버만 DB 접근 가능 |
+| **ShowPing-RDS-SG-FINAL** | 3306 ← `ShowPing-EC2-SG` + 관리자 IP(`183.102.62.130/32`) | EC2 서버 및 관리자만 DB 접근 |
 
 **핵심:** EC2의 8080 포트에 `0.0.0.0/0`을 열지 않고 ALB 보안그룹 ID로만 제한하여, 해커가 로드밸런서를 우회하여 직접 EC2에 접근하는 것을 원천 차단했습니다.
 
-**DBeaver 접속:** RDS가 Private Subnet에 위치하므로 외부에서 직접 접근이 불가합니다. EC2를 Bastion Host로 활용한 SSH 터널링을 통해 안전하게 접속합니다.
+**DBeaver 접속:** EC2를 Bastion Host로 활용한 SSH 터널링을 통해 Private Subnet의 RDS에 안전하게 접속합니다.
 
 ---
 
@@ -95,13 +99,13 @@
 
 **AMI & Launch Template:**
 - 정상 동작하는 EC2에서 AMI(`ShowPing-Gold-Image-v1`) 생성
-- Launch Template에 보안그룹, IAM Role(`S3StorageRole`) 연결
+- Launch Template에 보안그룹, IAM Role(`ShowPing-EC2-S3-Role`) 연결
 - 서브넷은 템플릿에 지정하지 않고 ASG에서 Multi-AZ 선택
 
 **Auto Scaling Group:**
 - Desired: 2 / Min: 2 / Max: 5
 - 스케일링 정책: CPU 평균 사용률 60% 대상 추적 (Target Tracking)
-- 가용 영역 2a, 2c에 걸쳐 인스턴스 분산 배치
+- 가용 영역 2a, 2b에 걸쳐 인스턴스 분산 배치
 - Sticky Session 활성화 (WebRTC/WebSocket 세션 유지)
 
 **검증:** ASG 활동 이력에서 Unhealthy 인스턴스 자동 교체(Self-Healing) 확인, Target Group에서 Healthy 상태 검증 완료
@@ -135,7 +139,7 @@
 
 - **현상:** 인프라 이전 후 라이브 방송이 작동하지 않음
 - **원인:** Kurento Media Server의 STUN 서버 IP가 이전 EC2의 IP를 참조하고 있었음
-- **해결:** EC2 터미널에서 `WebRtcEndpoint.conf.ini`의 `externalIPv4`를 새 탄력적 IP로 갱신, EC2 보안그룹에 UDP 10000-65535 포트 범위 개방, 컨테이너 재시작
+- **해결:** EC2 터미널에서 `WebRtcEndpoint.conf.ini`의 `externalIPv4`를 새 탄력적 IP(15.164.132.246)로 갱신, EC2 보안그룹에 UDP 10000-65535 포트 범위 개방, 컨테이너 재시작
 - **교훈:** WebRTC는 UDP 포트 범위와 STUN/TURN 서버 IP가 인프라 변경 시 함께 갱신되어야 함
 
 </details>
