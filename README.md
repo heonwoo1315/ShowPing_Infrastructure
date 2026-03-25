@@ -213,3 +213,5 @@ GitHub Push (main) → Build (Gradle) → Docker Build & Push → SCP → EC2 De
 - **교훈:** IaC 도구나 마법사가 자동 생성한 리소스도 실제 필요 여부를 데이터로 검증해야 함
 
 </details>
+
+추후 트래픽 증가 및 서비스 안정성 확보를 위해 RDS Multi-AZ 배포 및 ASG 최소 용량 증설을 통한 Active-Active 구성을 고려하고 있음
