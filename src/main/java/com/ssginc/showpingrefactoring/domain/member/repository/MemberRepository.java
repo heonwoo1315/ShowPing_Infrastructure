@@ -20,7 +20,11 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     boolean existsByMemberPhone(String phone);
 
     // 관리자 유저 검색: memberId, memberName, memberEmail 중 하나라도 포함되면 반환
-    @Query("SELECT m FROM Member m WHERE " +
+    @Query(value = "SELECT m FROM Member m WHERE " +
+            "m.memberId LIKE %:keyword% OR " +
+            "m.memberName LIKE %:keyword% OR " +
+            "m.memberEmail LIKE %:keyword%",
+            countQuery = "SELECT COUNT(m.memberNo) FROM Member m WHERE " +
             "m.memberId LIKE %:keyword% OR " +
             "m.memberName LIKE %:keyword% OR " +
             "m.memberEmail LIKE %:keyword%")
