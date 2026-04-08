@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -72,7 +73,8 @@ public class AdminServiceImpl implements AdminService {
             return PageResponse.from(memberRepository.findAll(pageable).map(AdminMemberResponseDto::new));
         }
         String ftKeyword = keyword.trim() + "*";
-        return PageResponse.from(memberRepository.findByKeyword(ftKeyword, pageable)
+        Pageable unsorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
+        return PageResponse.from(memberRepository.findByKeyword(ftKeyword, unsorted)
                 .map(AdminMemberResponseDto::new));
     }
 }
